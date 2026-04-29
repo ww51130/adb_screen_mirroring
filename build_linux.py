@@ -8,23 +8,20 @@ Requirements (install via apt if missing):
     sudo apt install python3 python3-pip python3-venv python3-dev \
       libqt6gui6 libqt6widgets6 libqt6core6 \
       libegl1 libxkbcommon0 libdbus-1-3
+
+Notes:
+    - Uses a venv in /tmp to avoid HgFS/VirtualBox shared-folder symlink issues.
+    - Only the project files stay in the shared folder.
 """
 
 import subprocess
 import sys
 import os
 import shutil
+import platform
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-VENV_DIR = os.path.join(HERE, ".venv_linux_build")
-
-
-def find_python():
-    """Pick python3, falling back to sys.executable."""
-    for cmd in ["python3", "python", sys.executable]:
-        if shutil.which(cmd):
-            return cmd
-    return sys.executable
+VENV_DIR = "/tmp/screen_mirroring_build_venv"
 
 
 def run(cmd, **kwargs):
@@ -39,12 +36,16 @@ def run(cmd, **kwargs):
 def main():
     print("=== Screen Mirroring — Linux Build ===\n")
 
-    python = find_python()
+    if platform.system() != "Linux":
+        print("This script is for Linux only.")
+        sys.exit(1)
 
-    # 1. Create virtual environment
+    # 1. Create venv in /tmp (avoids HgFS/VirtualBox shared-folder symlink issues)
+    python = shutil.which("python3") or shutil.which("python") or sys.executable
     if os.path.isdir(VENV_DIR):
         print(f"Reusing existing venv: {VENV_DIR}")
     else:
+        print(f"Creating venv at {VENV_DIR} ...")
         run([python, "-m", "venv", VENV_DIR])
 
     venv_python = os.path.join(VENV_DIR, "bin", "python3")
