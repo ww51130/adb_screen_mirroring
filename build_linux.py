@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Cross-platform build helper — run this on Linux to build the binary."""
+"""Cross-platform build helper — run this on Linux to build the binary.
+
+Usage:
+    python3 build_linux.py
+
+Requirements (install via apt if missing):
+    sudo apt install python3 python3-pip python3-dev libqt6gui6 libqt6widgets6
+
+The script uses sys.executable (the Python running this script) so it works
+correctly whether invoked as 'python3', 'python', or via an absolute path.
+"""
 
 import subprocess
 import sys
