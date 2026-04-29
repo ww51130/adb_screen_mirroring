@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual env
+venv/
+.venv/
+env/
+.env/
+
+# PyInstaller
+*.spec
+!screen_mirroring.spec
+!screen_mirroring_linux.spec
+
+# Logs
+*.log
+
+# Generated test/debug artifacts
+*.png
+*.jpg
+*.xwd
+*.exe
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+
+# Test/debug artifacts
+test_*.py
+debug_*.py
+test_main_exact.py
+test_gui_integration.py
+test_linux_isolated.py
+test_integration.py
+test_pipeline.sh
+
+# Recordings (generated at runtime)
+recordings/
