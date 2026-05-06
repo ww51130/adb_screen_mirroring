@@ -4,8 +4,7 @@ import logging
 import time
 from pathlib import Path
 from datetime import datetime
-from PyQt6.QtCore import QThread, pyqtSignal, QObject
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +17,7 @@ class RecordingHandler(QObject):
     recording_error = pyqtSignal(str)
     duration_updated = pyqtSignal(float)  # seconds
 
-    # Max recording time in seconds (5 min default)
-    MAX_DURATION = 300
+    MAX_DURATION = 300  # seconds (5 min)
 
     def __init__(self, serial: str, adb_manager, output_dir: Path, parent=None):
         super().__init__(parent)
@@ -27,7 +25,6 @@ class RecordingHandler(QObject):
         self._adb = adb_manager
         self._output_dir = output_dir
         self._device_path = "/sdcard/recording.mp4"
-        self._process: subprocess.Popen | None = None
         self._is_recording = False
         self._start_time: float = 0.0
         self._timer: QTimer | None = None
@@ -48,25 +45,79 @@ class RecordingHandler(QObject):
         self._local_path = self._output_dir / filename
 
         try:
-            # Start screenrecord in background
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # 1. Verify screenrecord is available on the device
+            check = self._adb.shell(
+                self.serial,
+                f"which screenrecord || ls /system/bin/screenrecord /system/xbin/screenrecord 2>/dev/null || echo NOT_FOUND",
+                timeout=10,
+            )
+            logger.debug(f"screenrecord check: {check!r}")
+            if "NOT_FOUND" in check or not check.strip():
+                msg = (
+                    "screenrecord command not found on the device. "
+                    "This feature requires Android 4.4+ with screenrecord in PATH."
+                )
+                logger.error(msg)
+                self.recording_error.emit(msg)
+                return False
 
+            # 2. Clean up any stale file from a previous session
+            try:
+                self._adb.shell(self.serial, f"rm -f {self._device_path}", timeout=5)
+            except Exception:
+                pass
+
+            # 3. Start screenrecord via adb shell (device manages the process)
+            #    Use > /dev/null 2>&1 to detach from stdout/stderr on device side.
+            #    We keep the adb shell pipe open to detect disconnects.
+            screenrecord_cmd = (
+                f"screenrecord --time-limit={self.MAX_DURATION // 60} "
+                f"--bit-rate=8000000 {self._device_path}"
+            )
             proc = subprocess.Popen(
                 [
                     self._adb.find_adb(),
                     "-s", self.serial,
-                    "shell", "screenrecord",
-                    f"--time-limit={self.MAX_DURATION // 60}",
-                    "--bit-rate=8000000",
-                    self._device_path,
+                    "shell", screenrecord_cmd,
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+                creationflags=(
+                    subprocess.CREATE_NO_WINDOW
+                    if hasattr(subprocess, "CREATE_NO_WINDOW")
+                    else 0
+                ),
             )
-            self._process = proc
+            self._proc = proc
+
+            # 4. Wait briefly for the file to appear (confirms screenrecord started)
+            for i in range(10):
+                time.sleep(0.3)
+                try:
+                    out = self._adb.shell(self.serial, f"ls {self._device_path}", timeout=3)
+                    if out.strip():
+                        break
+                except Exception:
+                    pass
+            else:
+                # Capture stderr for diagnostics before failing
+                proc.terminate()
+                try:
+                    _, stderr = proc.communicate(timeout=3)
+                    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+                except Exception:
+                    stderr_text = "(unable to read stderr)"
+                msg = (
+                    f"screenrecord failed to start. "
+                    f"Device stderr: {stderr_text!r}"
+                )
+                logger.error(msg)
+                self.recording_error.emit(
+                    "Recording start failed. Device may not support screenrecord "
+                    "(requires Android 4.4+)."
+                )
+                return False
+
             self._is_recording = True
             self._start_time = time.time()
 
@@ -89,8 +140,6 @@ class RecordingHandler(QObject):
         if self._is_recording:
             elapsed = time.time() - self._start_time
             self.duration_updated.emit(elapsed)
-
-            # Auto-stop at max duration
             if elapsed >= self.MAX_DURATION:
                 logger.info("Max recording duration reached.")
                 self.stop()
@@ -113,30 +162,31 @@ class RecordingHandler(QObject):
         except Exception as e:
             logger.warning(f"pkill screenrecord failed: {e}")
 
-        # Sync filesystem to ensure the file is flushed to disk
+        # Sync + wait for filesystem to flush
         try:
             self._adb.shell(self.serial, "sync", timeout=5)
-        except Exception as e:
-            logger.warning(f"sync failed: {e}")
-
-        # Give filesystem extra time to write
+        except Exception:
+            pass
         time.sleep(1.0)
 
         try:
-            # Verify file exists on device before pulling
+            # Verify file exists before pulling
             check = self._adb.shell(
-                self.serial,
-                f"ls -la {self._device_path}",
-                timeout=5,
+                self.serial, f"ls -la {self._device_path}", timeout=5
             )
-            logger.debug(f"Device file check: {check!r}")
             if not check.strip():
                 raise FileNotFoundError(
                     f"Recording file not found on device at {self._device_path}"
                 )
+            logger.debug(f"Device file: {check!r}")
 
-            # Pull file
-            self._adb.pull(self.serial, self._device_path, str(self._local_path), timeout=120)
+            # Pull
+            self._adb.pull(
+                self.serial,
+                self._device_path,
+                str(self._local_path),
+                timeout=120,
+            )
 
             # Cleanup device file
             try:
@@ -153,9 +203,21 @@ class RecordingHandler(QObject):
 
         except FileNotFoundError:
             logger.exception("Recording stop failed")
-            self.recording_error.emit("Recording file not found. Make sure the device has enough storage.")
+            self.recording_error.emit(
+                "Recording file not found. Make sure the device has enough storage."
+            )
             return None
         except Exception as e:
             logger.exception("Recording stop failed")
             self.recording_error.emit(str(e))
             return None
+        finally:
+            # Clean up the host-side subprocess pipe
+            proc = getattr(self, "_proc", None)
+            if proc:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+                self._proc = None
