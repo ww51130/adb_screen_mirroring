@@ -45,17 +45,21 @@ class RecordingHandler(QObject):
         self._local_path = self._output_dir / filename
 
         try:
-            # 1. Verify screenrecord is available on the device
+            # Check if screenrecord exists on the device.
+            # Avoids 'which' (not on all Android versions); directly checks known paths.
             check = self._adb.shell(
                 self.serial,
-                f"which screenrecord || ls /system/bin/screenrecord /system/xbin/screenrecord 2>/dev/null || echo NOT_FOUND",
+                "ls /system/bin/screenrecord /system/xbin/screenrecord /vendor/bin/screenrecord 2>&1",
                 timeout=10,
             )
-            logger.debug(f"screenrecord check: {check!r}")
-            if "NOT_FOUND" in check or not check.strip():
+            # ls prints each found path; 'No such file' for each missing one
+            logger.debug(f"screenrecord locations check: {check!r}")
+            if "No such file" in check or not check.strip():
                 msg = (
-                    "screenrecord command not found on the device. "
-                    "This feature requires Android 4.4+ with screenrecord in PATH."
+                    "screenrecord not found on the device. "
+                    "This feature requires Android 4.4+ (KitKat) with screenrecord "
+                    "at /system/bin/screenrecord. Your device may not support it, "
+                    "or you may need a custom ROM."
                 )
                 logger.error(msg)
                 self.recording_error.emit(msg)
