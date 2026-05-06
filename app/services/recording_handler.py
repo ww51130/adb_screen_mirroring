@@ -113,10 +113,28 @@ class RecordingHandler(QObject):
         except Exception as e:
             logger.warning(f"pkill screenrecord failed: {e}")
 
-        # Give it a moment to write the file
-        time.sleep(0.5)
+        # Sync filesystem to ensure the file is flushed to disk
+        try:
+            self._adb.shell(self.serial, "sync", timeout=5)
+        except Exception as e:
+            logger.warning(f"sync failed: {e}")
+
+        # Give filesystem extra time to write
+        time.sleep(1.0)
 
         try:
+            # Verify file exists on device before pulling
+            check = self._adb.shell(
+                self.serial,
+                f"ls -la {self._device_path}",
+                timeout=5,
+            )
+            logger.debug(f"Device file check: {check!r}")
+            if not check.strip():
+                raise FileNotFoundError(
+                    f"Recording file not found on device at {self._device_path}"
+                )
+
             # Pull file
             self._adb.pull(self.serial, self._device_path, str(self._local_path), timeout=120)
 
@@ -133,6 +151,10 @@ class RecordingHandler(QObject):
             else:
                 raise FileNotFoundError("Recording file not found after pull.")
 
+        except FileNotFoundError:
+            logger.exception("Recording stop failed")
+            self.recording_error.emit("Recording file not found. Make sure the device has enough storage.")
+            return None
         except Exception as e:
             logger.exception("Recording stop failed")
             self.recording_error.emit(str(e))
